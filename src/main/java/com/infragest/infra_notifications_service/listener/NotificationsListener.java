@@ -41,6 +41,11 @@ public class NotificationsListener {
 
         log.info("Mensaje recibido: " + event);
 
+        if (event == null || event.getOrderId() == null) {
+            log.error("Evento de orden inválido recibido: {}", event);
+            return;
+        }
+
         // Procesar el evento delegándolo al servicio
         try {
             notificationService.processOrderCreatedEvent(event);

@@ -68,20 +68,31 @@ public class NotificationServiceImpl implements NotificationService {
 
         if (orderEvent.getRecipientEmails() == null || orderEvent.getRecipientEmails().isEmpty()) {
             log.warn("No se encontraron destinatarios para la orden ID: {}", orderEvent.getOrderId());
-            saveNotification(orderEvent.getOrderId(), null, NotificationStatus.FAILED, "Sin destinatarios para la notificación.");
+            saveNotification(orderEvent.getOrderId(), null, NotificationStatus.FAILED, "Sin destinatarios para la notificación.", null);
             sendConfirmation(orderEvent, "FAILED");
             return;
         }
 
+        // Obtener el template una vez antes del loop
+        Optional<EmailTemplate> optionalTemplate = emailTemplateRepository.findByName("order_created");
+
+        if (optionalTemplate.isEmpty()) {
+            log.warn("Template 'order_created' no encontrado. Degradando las notificaciones a estado 'FAILED'.");
+
+            // Registrar un estado general como FALLIDO sin intentar enviar notificaciones
+            orderEvent.getRecipientEmails().forEach(email ->
+                    saveNotification(orderEvent.getOrderId(), email, NotificationStatus.FAILED, "Template de correo no disponible.", null)
+            );
+
+            // Publicar confirmación de falla
+            sendConfirmation(orderEvent, "FAILED");
+            return;
+        }
+
+        EmailTemplate template = optionalTemplate.get();
+
         // Enviar notificaciones a los destinatarios
-        orderEvent.getRecipientEmails().forEach(email -> {
-            try {
-                sendNotification(orderEvent, email);
-            } catch (Exception ex) {
-                log.error("Error al enviar notificación a: {} para la orden ID: {}", email, orderEvent.getOrderId(), ex);
-                saveNotification(orderEvent.getOrderId(), email, NotificationStatus.FAILED, ex.getMessage());
-            }
-        });
+        orderEvent.getRecipientEmails().forEach(email -> sendNotification(orderEvent, email, template));
 
         // Publicar confirmación general como éxito si al menos un correo se envió
         sendConfirmation(orderEvent, "SUCCESS");
@@ -93,17 +104,19 @@ public class NotificationServiceImpl implements NotificationService {
      * @param orderEvent Evento que contiene el ID de la orden y otros datos relevantes.
      * @param recipientEmail Correo electrónico del destinatario.
      */
-    private void sendNotification(OrderEvent orderEvent, String recipientEmail) {
+    private void sendNotification(OrderEvent orderEvent, String recipientEmail, EmailTemplate template) {
         log.info("Enviando notificación a: {} para la orden ID: {}", recipientEmail, orderEvent.getOrderId());
 
-        // Simulación de envío real de correo (aquí podrías usar SendGrid o una API similar)
         try {
             // Simular lógica de envío de correo (esto sería la integración real con un cliente de correos)
+
+
+
             log.info("Correo enviado satisfactoriamente a: {}", recipientEmail);
-            saveNotification(orderEvent.getOrderId(), recipientEmail, NotificationStatus.SENT, "Correo enviado exitosamente.");
+            saveNotification(orderEvent.getOrderId(), recipientEmail, NotificationStatus.SENT, "Correo enviado exitosamente.", template);
         } catch (Exception ex) {
-            log.error("Error enviando correo a: {}", recipientEmail, ex);
-            throw new RuntimeException("Fallo en notificación a " + recipientEmail, ex);
+            log.error("Error enviando correo a: {} para la orden ID: {}", recipientEmail, orderEvent.getOrderId(), ex);
+            saveNotification(orderEvent.getOrderId(), recipientEmail, NotificationStatus.FAILED, "Error al enviar correo: " + ex.getMessage(), template);
         }
     }
 
@@ -138,17 +151,7 @@ public class NotificationServiceImpl implements NotificationService {
      * @param status Estado de la notificación (SENT, FAILED, PENDING).
      * @param message Mensaje adicional relacionado con el envío.
      */
-    public void saveNotification(UUID orderId, String recipientEmail, NotificationStatus status, String message) {
-
-        // Buscar el template requerido para la notificación
-        Optional<EmailTemplate> optionalTemplate = emailTemplateRepository.findByName("order_created");
-
-        if (optionalTemplate.isEmpty()) {
-            log.error("Template 'order_created' no encontrado. Asociación fallida.");
-            throw new RuntimeException("Se requiere un template válido para continuar.");
-        }
-
-        EmailTemplate template = optionalTemplate.get();
+    public void saveNotification(UUID orderId, String recipientEmail, NotificationStatus status, String message, EmailTemplate template) {
 
         // Crear la notificación, asociando el template
         Notification notification = Notification.builder()

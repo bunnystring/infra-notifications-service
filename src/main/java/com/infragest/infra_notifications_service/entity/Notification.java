@@ -9,7 +9,7 @@ import java.util.UUID;
 /**
  * Entidad que representa una notificación enviada por el sistema.
  * Cada notificación contiene información sobre el destinatario, estado del envío
- * y el template utilizado (opcional).
+ * y el template utilizado (obligatorio).
  *
  * Extiende {@link BaseEntity} para reutilizar atributos base como IDs y timestamps.
  * Está relacionada con {@link EmailTemplate} para registrar el template utilizado.
@@ -40,7 +40,7 @@ public class Notification extends BaseEntity {
     /**
      * Dirección de correo electrónico del destinatario.
      */
-    @Column(name = "recipient_email", nullable = false, length = 255)
+    @Column(name = "recipient_email", length = 255)
     private String recipientEmail;
 
     /**
@@ -63,6 +63,8 @@ public class Notification extends BaseEntity {
      */
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "template_id", nullable = false)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private EmailTemplate template;
 
 }
