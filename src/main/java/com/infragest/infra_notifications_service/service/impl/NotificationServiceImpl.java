@@ -1,9 +1,11 @@
 package com.infragest.infra_notifications_service.service.impl;
 
+import com.infragest.infra_notifications_service.entity.EmailTemplate;
 import com.infragest.infra_notifications_service.entity.Notification;
 import com.infragest.infra_notifications_service.enums.NotificationStatus;
 import com.infragest.infra_notifications_service.event.NotificationEvent;
 import com.infragest.infra_notifications_service.event.OrderEvent;
+import com.infragest.infra_notifications_service.repository.EmailTemplateRepository;
 import com.infragest.infra_notifications_service.repository.NotificationRepository;
 import com.infragest.infra_notifications_service.service.NotificationService;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +13,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -34,13 +37,21 @@ public class NotificationServiceImpl implements NotificationService {
     private final NotificationRepository notificationRepository;
 
     /**
-     * Constructor con los parametros de la clase.
-     *
-     * @param rabbitMQConfig RabbitTemplate configurado para la interacción con RabbitMQ.
+     * EmailTemplateRepository: repositorio de template email.
      */
-    public NotificationServiceImpl(RabbitTemplate rabbitMQConfig, NotificationRepository notificationRepository) {
+    private final EmailTemplateRepository emailTemplateRepository;
+
+    /**
+     * Constructor con los parámetros necesarios para la inicialización del servicio de notificaciones.
+     *
+     * @param rabbitMQConfig RabbitTemplate configurado para interactuar con RabbitMQ.
+     * @param notificationRepository Repositorio utilizado para persistir notificaciones en la base de datos.
+     * @param emailTemplateRepository Repositorio utilizado para buscar templates de correo.
+     */
+    public NotificationServiceImpl(RabbitTemplate rabbitMQConfig, NotificationRepository notificationRepository, EmailTemplateRepository emailTemplateRepository) {
         this.rabbitTemplate = rabbitMQConfig;
         this.notificationRepository = notificationRepository;
+        this.emailTemplateRepository = emailTemplateRepository;
     }
 
     /**
@@ -128,11 +139,24 @@ public class NotificationServiceImpl implements NotificationService {
      * @param message Mensaje adicional relacionado con el envío.
      */
     public void saveNotification(UUID orderId, String recipientEmail, NotificationStatus status, String message) {
+
+        // Buscar el template requerido para la notificación
+        Optional<EmailTemplate> optionalTemplate = emailTemplateRepository.findByName("order_created");
+
+        if (optionalTemplate.isEmpty()) {
+            log.error("Template 'order_created' no encontrado. Asociación fallida.");
+            throw new RuntimeException("Se requiere un template válido para continuar.");
+        }
+
+        EmailTemplate template = optionalTemplate.get();
+
+        // Crear la notificación, asociando el template
         Notification notification = Notification.builder()
                 .orderId(orderId)
                 .recipientEmail(recipientEmail)
                 .status(status)
                 .message(message)
+                .template(template)
                 .build();
 
         notificationRepository.save(notification);

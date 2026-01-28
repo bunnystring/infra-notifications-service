@@ -6,6 +6,17 @@ import lombok.*;
 
 import java.util.UUID;
 
+/**
+ * Entidad que representa una notificación enviada por el sistema.
+ * Cada notificación contiene información sobre el destinatario, estado del envío
+ * y el template utilizado (opcional).
+ *
+ * Extiende {@link BaseEntity} para reutilizar atributos base como IDs y timestamps.
+ * Está relacionada con {@link EmailTemplate} para registrar el template utilizado.
+ *
+ * @author
+ * @since 2026-01-27
+ */
 @Entity
 @Table(name = "notifications", indexes = {
         @Index(name = "idx_notification_order_id", columnList = "order_id"),
@@ -45,5 +56,13 @@ public class Notification extends BaseEntity {
      */
     @Column(name = "message", columnDefinition = "TEXT")
     private String message;
+
+    /**
+     * Relación con {@link EmailTemplate}.
+     * Esta relación es obligatoria: cada notificación debe estar asociada a un template.
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "template_id", nullable = false)
+    private EmailTemplate template;
 
 }
