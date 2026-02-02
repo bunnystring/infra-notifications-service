@@ -19,11 +19,11 @@ public class RabbitMQConfig {
 
     public static final String EXCHANGE_NAME = "orders.exchange";
     public static final String QUEUE_NAME = "notifications.queue";
-    public static final String ROUTING_KEY = "order.created";
+    public static final String ROUTING_KEY_PATTERN = "order.state.*";
     public static final String NOTIFICATIONS_EXCHANGE = "notifications.exchange";
 
     /**
-     * Configura la cola durable 'notifications.queue'.
+     * Configura la cola durable 'notifications.queue' para escuchar eventos de órdenes.
      */
     @Bean
     public Queue notificationsQueue() {
@@ -33,6 +33,7 @@ public class RabbitMQConfig {
 
     /**
      * Configura el exchange 'orders.exchange' de tipo Topic.
+     * Este es el exchange donde el microservicio de órdenes publica los cambios.
      */
     @Bean
     public TopicExchange ordersExchange() {
@@ -41,15 +42,16 @@ public class RabbitMQConfig {
     }
 
     /**
-     * Vincula la cola 'notifications.queue' al exchange 'orders.exchange' con una routing key.
+     * Vincula la cola 'notifications.queue' al exchange 'orders.exchange' usando un patrón de routing key.
+     * Este patrón permite escuchar todos los eventos relacionados con los estados de las órdenes (`order.state.*`).
      */
     @Bean
     public Binding binding(Queue notificationsQueue, TopicExchange ordersExchange) {
         log.info("Creando binding entre exchange '" + EXCHANGE_NAME + "' y cola '" + QUEUE_NAME
-                + "' con routing key '" + ROUTING_KEY + "'");
+                + "' con patrón de routing key '" + ROUTING_KEY_PATTERN + "'");
         return BindingBuilder.bind(notificationsQueue)
                 .to(ordersExchange)
-                .with(ROUTING_KEY);
+                .with(ROUTING_KEY_PATTERN);
     }
 
     /**
@@ -63,6 +65,7 @@ public class RabbitMQConfig {
 
     /**
      * Asocia el convertidor JSON al RabbitTemplate.
+     * Este objeto se utilizará para enviar mensajes como JSON.
      */
     @Bean
     public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory, MessageConverter messageConverter) {
@@ -72,12 +75,14 @@ public class RabbitMQConfig {
     }
 
     /**
-     * Configuración del exchange para confirmaciones.
+     * Configuración del exchange para confirmaciones de notificaciones.
+     * Este es un exchange separado para usar en confirmaciones, si es necesario.
      *
-     * @return un intercambio (Topic Exchange) para confirmaciones de notificaciones.
+     * @return un Topic Exchange de confirmación.
      */
     @Bean
     public TopicExchange notificationsExchange() {
+        log.info("Creando exchange de confirmaciones: " + NOTIFICATIONS_EXCHANGE);
         return new TopicExchange(NOTIFICATIONS_EXCHANGE);
     }
 }
