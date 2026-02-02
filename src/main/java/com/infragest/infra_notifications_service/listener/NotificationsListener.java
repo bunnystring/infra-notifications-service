@@ -10,6 +10,9 @@ import org.springframework.stereotype.Component;
 /**
  * Listener para procesar mensajes de RabbitMQ relacionados con órdenes.
  *
+ * Maneja eventos de órdenes publicados desde `orders.exchange`.
+ * Escucha diferentes estados de órdenes y delega el procesamiento a {@link NotificationService}.
+ *
  * @author bunnystring
  * @since 2026-01-27
  */
@@ -39,13 +42,35 @@ public class NotificationsListener {
     @RabbitListener(queues = RabbitMQConfig.QUEUE_NAME)
     public void handleOrderEvent(OrderEvent event) {
 
-        log.info("Mensaje recibido: " + event);
+        log.info("Mensaje recibido desde RabbitMQ para la orden ID: {}. Estado: {}", event.getOrderId(), event.getState());
 
-        // Procesar el evento delegándolo al servicio
         try {
-            notificationService.processOrderCreatedEvent(event);
+
+            // Procesar el evento basado en el estado recibido
+            switch (event.getState()) {
+                case CREATED:
+                    log.info("Procesando el estado CREATED para la orden ID: {}", event.getOrderId());
+                    notificationService.processOrderCreatedEvent(event);
+                    break;
+
+                case IN_PROCESS:
+                case DISPATCHED:
+                    log.info("Procesando los estados IN_PROCESS o DISPATCHED para la orden ID: {}", event.getOrderId());
+                    notificationService.processOrderUpdatedEvent(event);
+                    break;
+
+                case FINISHED:
+                    log.info("Procesando el estado FINISHED para la orden ID: {}", event.getOrderId());
+                    notificationService.processOrderFinishedEvent(event);
+                    break;
+
+                default:
+                    log.warn("Estado desconocido recibido: {}. Ignorando el evento: {}", event.getState(), event);
+            }
+
         } catch (Exception e) {
-            log.error("Error al procesar el evento OrderEvent: {}", event, e);
+            log.error("Error al procesar el evento para la orden ID: {}. Estado: {}. Detalles del evento: {}",
+                    event.getOrderId(), event.getState(), event, e);
         }
     }
 }

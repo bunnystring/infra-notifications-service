@@ -19,8 +19,8 @@ public interface EmailTemplateRepository extends JpaRepository<EmailTemplate, UU
      * Busca un template de correo por su nombre único.
      *
      * @param name Nombre único del template utilizado como identificador.
-     * @return Un Optional que contiene el EmailTemplate si se encuentra, o vacío en caso contrario.
+     * @return EmailTemplate si se encuentra, o vacío en caso contrario.
      */
-    Optional<EmailTemplate> findByName(String name);
+    EmailTemplate findByName(String name);
 
 }
