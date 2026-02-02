@@ -8,6 +8,7 @@ import com.infragest.infra_notifications_service.event.OrderEvent;
 import com.infragest.infra_notifications_service.repository.EmailTemplateRepository;
 import com.infragest.infra_notifications_service.repository.NotificationRepository;
 import com.infragest.infra_notifications_service.service.NotificationService;
+import com.infragest.infra_notifications_service.service.SendGridEmailService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -42,68 +43,139 @@ public class NotificationServiceImpl implements NotificationService {
     private final EmailTemplateRepository emailTemplateRepository;
 
     /**
-     * Constructor con los parámetros necesarios para la inicialización del servicio de notificaciones.
-     *
-     * @param rabbitMQConfig RabbitTemplate configurado para interactuar con RabbitMQ.
-     * @param notificationRepository Repositorio utilizado para persistir notificaciones en la base de datos.
-     * @param emailTemplateRepository Repositorio utilizado para buscar templates de correo.
+     * SendGridEmailService: servicio de sendGridEmailService.
      */
-    public NotificationServiceImpl(RabbitTemplate rabbitMQConfig, NotificationRepository notificationRepository, EmailTemplateRepository emailTemplateRepository) {
+    private final SendGridEmailService sendGridEmailService;
+
+    /**
+     * Constructor del servicio de notificaciones.
+     *
+     * @param rabbitTemplate          RabbitTemplate configurado para RabbitMQ.
+     * @param notificationRepository  Repositorio usado para persistir notificaciones.
+     * @param emailTemplateRepository Repositorio usado para buscar plantillas de correo.
+     * @param sendGridEmailService    Servicio externo para envío de correos.
+     */
+    public NotificationServiceImpl(RabbitTemplate rabbitMQConfig, NotificationRepository notificationRepository, EmailTemplateRepository emailTemplateRepository, SendGridEmailService sendGridEmailService) {
         this.rabbitTemplate = rabbitMQConfig;
         this.notificationRepository = notificationRepository;
         this.emailTemplateRepository = emailTemplateRepository;
+        this.sendGridEmailService = sendGridEmailService;
     }
 
     /**
-     * Escucha mensajes desde la cola de RabbitMQ y procesa los eventos.
-     * Este método se ejecuta cada vez que RabbitMQ envía un mensaje a la cola.
+     * Procesa un evento de creación de una orden.
      *
-     * @param orderEvent Evento que notifica la creación de una orden.
+     * Este método ingresa al flujo cuando una nueva orden es creada (estado CREATED).
+     * Busca una plantilla de correo, y envía correos a los destinatarios de la orden.
+     * También publica una confirmación en RabbitMQ del estado de las notificaciones.
+     *
+     * @param orderEvent Evento recibido que contiene detalles de la orden creada.
      */
     @Override
-    @RabbitListener(queues = "notifications.queue")
     public void processOrderCreatedEvent(OrderEvent orderEvent) {
+        log.info("Procesando evento de orden - Estado: CREATED. Orden ID: {}", orderEvent.getOrderId());
 
-        log.info("Procesando evento de orden ID: {}", orderEvent.getOrderId());
+        // Procesar las notificaciones usando la plantilla `order_created`
+        processOrderEventWithTemplate(orderEvent, "order_created");
+    }
 
-        if (orderEvent.getRecipientEmails() == null || orderEvent.getRecipientEmails().isEmpty()) {
-            log.warn("No se encontraron destinatarios para la orden ID: {}", orderEvent.getOrderId());
-            saveNotification(orderEvent.getOrderId(), null, NotificationStatus.FAILED, "Sin destinatarios para la notificación.");
+    /**
+     * Procesa un evento para órdenes actualizadas.
+     *
+     * Este método gestiona estados intermedios como:
+     * - IN_PROCESS: La orden está en proceso.
+     * - DISPATCHED: La orden ha sido enviada.
+     *
+     * Utiliza la plantilla `order_updated` para generar los correos.
+     *
+     * @param orderEvent Evento recibido que describe la actualización de una orden.
+     */
+    @Override
+    public void processOrderUpdatedEvent(OrderEvent orderEvent) {
+        log.info("Procesando evento de orden - Estado: UPDATED (IN_PROCESS/DISPATCHED). Orden ID: {}", orderEvent.getOrderId());
+
+        // Procesar las notificaciones usando la plantilla `order_updated`
+        processOrderEventWithTemplate(orderEvent, "order_updated");
+    }
+
+    /**
+     * Procesa un evento para órdenes finalizadas.
+     *
+     * Este método es invocado cuando una orden alcanza el estado FINISHED.
+     * Utiliza la plantilla `order_finished` para contactar a los destinatarios
+     * y notificar que la orden ha sido completada.
+     *
+     * @param orderEvent Evento recibido que describe la finalización de una orden.
+     */
+    @Override
+    public void processOrderFinishedEvent(OrderEvent orderEvent) {
+        log.info("Procesando evento de orden - Estado: FINISHED. Orden ID: {}", orderEvent.getOrderId());
+
+        // Procesar las notificaciones usando la plantilla `order_finished`
+        processOrderEventWithTemplate(orderEvent, "order_finished");
+    }
+
+    /**
+     * Procesa un evento de notificación utilizando una plantilla específica.
+     *
+     * @param orderEvent   Evento recibido del sistema que describe el estado de la orden.
+     * @param templateName Nombre de la plantilla de correo a utilizar.
+     */
+    private void processOrderEventWithTemplate(OrderEvent orderEvent, String templateName) {
+
+        // Obtener la plantilla de correo según el nombre del estado
+        EmailTemplate template = emailTemplateRepository.findByName(templateName);
+
+        if (template == null) {
+            log.warn("La plantilla '{}' no se encontró. No se enviará ninguna notificación para la orden ID: {}", templateName, orderEvent.getOrderId());
             sendConfirmation(orderEvent, "FAILED");
             return;
         }
 
-        // Enviar notificaciones a los destinatarios
-        orderEvent.getRecipientEmails().forEach(email -> {
-            try {
-                sendNotification(orderEvent, email);
-            } catch (Exception ex) {
-                log.error("Error al enviar notificación a: {} para la orden ID: {}", email, orderEvent.getOrderId(), ex);
-                saveNotification(orderEvent.getOrderId(), email, NotificationStatus.FAILED, ex.getMessage());
-            }
-        });
+        // Validar destinatarios
+        if (orderEvent.getRecipientEmails() == null || orderEvent.getRecipientEmails().isEmpty()) {
+            log.warn("Eventos sin destinatarios para la orden ID: {}", orderEvent.getOrderId());
+            saveNotification(orderEvent.getOrderId(), null, NotificationStatus.FAILED, "Sin destinatarios", template);
+            sendConfirmation(orderEvent, "FAILED");
+            return;
+        }
 
-        // Publicar confirmación general como éxito si al menos un correo se envió
+        // Enviar notificaciones a cada destinatario
+        orderEvent.getRecipientEmails().forEach(email -> sendNotification(template, orderEvent, email));
+
+        // Enviar confirmación de éxito
         sendConfirmation(orderEvent, "SUCCESS");
     }
 
     /**
-     * Envía una notificación a un correo específico y registra el resultado.
+     * Envía una notificación de correo a un destinatario específico y guarda el estado.
      *
-     * @param orderEvent Evento que contiene el ID de la orden y otros datos relevantes.
-     * @param recipientEmail Correo electrónico del destinatario.
+     * @param template       Plantilla utilizada para construir el correo.
+     * @param orderEvent     Evento recibido que describe la orden y otros detalles.
+     * @param recipientEmail Email del destinatario.
      */
-    private void sendNotification(OrderEvent orderEvent, String recipientEmail) {
-        log.info("Enviando notificación a: {} para la orden ID: {}", recipientEmail, orderEvent.getOrderId());
+    private void sendNotification(EmailTemplate template, OrderEvent orderEvent, String recipientEmail) {
 
-        // Simulación de envío real de correo (aquí podrías usar SendGrid o una API similar)
+        UUID orderId = orderEvent.getOrderId();
+        log.info("Enviando notificación a: {} para la orden ID: {}", recipientEmail, orderId);
+
+        // Construir el contenido del correo usando la plantilla
+        String subject = template.getSubject();
+        String content = template.getBody()
+                .replace("{orderId}", orderId.toString())
+                .replace("{recipientEmail}", recipientEmail);
+
         try {
-            // Simular lógica de envío de correo (esto sería la integración real con un cliente de correos)
-            log.info("Correo enviado satisfactoriamente a: {}", recipientEmail);
-            saveNotification(orderEvent.getOrderId(), recipientEmail, NotificationStatus.SENT, "Correo enviado exitosamente.");
+
+            // Enviar el correo con SendGrid
+            sendGridEmailService.sendEmail(recipientEmail, subject, content);
+
+            // Persistir notificación
+            saveNotification(orderEvent.getOrderId(), recipientEmail, NotificationStatus.SENT, "Correo enviado exitosamente.", template);
+
         } catch (Exception ex) {
-            log.error("Error enviando correo a: {}", recipientEmail, ex);
-            throw new RuntimeException("Fallo en notificación a " + recipientEmail, ex);
+            log.error("Fallo al enviar correo para ID de orden: {}, destinatario: {}", orderEvent.getOrderId(), recipientEmail, ex);
+            saveNotification(orderEvent.getOrderId(), recipientEmail, NotificationStatus.FAILED, ex.getMessage(), template);
         }
     }
 
@@ -115,19 +187,11 @@ public class NotificationServiceImpl implements NotificationService {
      * @param status Estado de la notificación procesada. Por ejemplo: "SUCCESS" o "FAILED".
      */
     private void sendConfirmation(OrderEvent event, String status) {
+
         NotificationEvent notificationEvent = new NotificationEvent(event.getOrderId(), status, "Estado: " + status);
+
         rabbitTemplate.convertAndSend("notifications.exchange", "notification.completed", notificationEvent);
         log.info("Confirmación publicada: {}", notificationEvent);
-    }
-
-    /**
-     * Procesa un evento de RabbitMQ que notifica la actualización de una orden.
-     *
-     * @param orderEvent Evento con los detalles de la orden actualizada.
-     */
-    @Override
-    public void processOrderUpdatedEvent(OrderEvent orderEvent) {
-
     }
 
     /**
@@ -135,22 +199,11 @@ public class NotificationServiceImpl implements NotificationService {
      *
      * @param orderId ID de la orden asociada.
      * @param recipientEmail Correo electrónico del destinatario.
-     * @param status Estado de la notificación (SENT, FAILED, PENDING).
+     * @param status Estado de la notificación.
      * @param message Mensaje adicional relacionado con el envío.
      */
-    public void saveNotification(UUID orderId, String recipientEmail, NotificationStatus status, String message) {
+    public void saveNotification(UUID orderId, String recipientEmail, NotificationStatus status, String message, EmailTemplate template) {
 
-        // Buscar el template requerido para la notificación
-        Optional<EmailTemplate> optionalTemplate = emailTemplateRepository.findByName("order_created");
-
-        if (optionalTemplate.isEmpty()) {
-            log.error("Template 'order_created' no encontrado. Asociación fallida.");
-            throw new RuntimeException("Se requiere un template válido para continuar.");
-        }
-
-        EmailTemplate template = optionalTemplate.get();
-
-        // Crear la notificación, asociando el template
         Notification notification = Notification.builder()
                 .orderId(orderId)
                 .recipientEmail(recipientEmail)
@@ -160,7 +213,6 @@ public class NotificationServiceImpl implements NotificationService {
                 .build();
 
         notificationRepository.save(notification);
-        log.info("Notificación registrada: Orden ID: {}, Email: {}, Estado: {}, Mensaje: {}",
-                orderId, recipientEmail, status, message);
+        log.info("Notificación registrada: Orden ID: {}, Email: {}, Estado: {}", orderId, recipientEmail, status);
     }
 }
