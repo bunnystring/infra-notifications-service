@@ -2,6 +2,7 @@ package com.infragest.infra_notifications_service.service.impl;
 
 import com.infragest.infra_notifications_service.exception.SengridException;
 import com.infragest.infra_notifications_service.service.SendGridEmailService;
+import com.infragest.infra_notifications_service.util.MessageException;
 import com.sendgrid.Method;
 import com.sendgrid.Request;
 import com.sendgrid.Response;
@@ -36,18 +37,27 @@ public class SendGridEmailServiceImpl implements SendGridEmailService {
     @Override
     public void sendEmail(String recipientEmail, String subject, String content) {
         if (fromEmail == null || fromEmail.isBlank()) {
-            throw new SengridException("El remitente (fromEmail) no está configurado.", SengridException.Type.INVALID_REQUEST);
+            throw new SengridException(MessageException.SENDER_EMAIL_NOT_CONFIGURED, SengridException.Type.INVALID_REQUEST);
         }
 
-        Email from = new Email(fromEmail); // Configurar remitente
-        Email to = new Email(recipientEmail); // Configurar destinatario
-        Content emailContent = new Content("text/plain", content); // Contenido del correo
-        Mail mail = new Mail(from, subject, to, emailContent); // Crear el correo
+        // Configurar remitente
+        Email from = new Email(fromEmail);
 
-        SendGrid sg = new SendGrid(sendGridApiKey); // Iniciar la conexión con la API Key
+        // Configurar destinatario
+        Email to = new Email(recipientEmail);
+
+        // Contenido del correo
+        Content emailContent = new Content("text/plain", content);
+
+        // Crear el correo
+        Mail mail = new Mail(from, subject, to, emailContent);
+
+        // Iniciar la conexión con la API Key
+        SendGrid sg = new SendGrid(sendGridApiKey);
         Request request = new Request();
 
         try {
+
             // Configurar el request de envío
             request.setMethod(Method.POST);
             request.setEndpoint("mail/send");
@@ -60,12 +70,13 @@ public class SendGridEmailServiceImpl implements SendGridEmailService {
                 return;
             } else {
                 // Manejo de errores por parte de SendGrid
-                throw new SengridException("Error al enviar correo. Código de estado: " + response.getStatusCode()
-                        + ", Respuesta: " + response.getBody(), SengridException.Type.API_ERROR);
+                throw new SengridException(String.format(MessageException.SENDGRID_API_ERROR,
+                        response.getStatusCode(),
+                        response.getBody()), SengridException.Type.API_ERROR);
             }
         } catch (IOException ex) {
             // Manejo de errores relacionados con la conexión o la IO
-            throw new SengridException("Fallo al conectar con SendGrid. Detalle: " + ex.getMessage(), SengridException.Type.SERVICE_UNAVAILABLE);
+            throw new SengridException(String.format(MessageException.SENDGRID_CONNECTION_FAILURE, ex.getMessage()), SengridException.Type.SERVICE_UNAVAILABLE);
         }
     }
 }
